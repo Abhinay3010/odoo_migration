@@ -1,51 +1,76 @@
 name: Odoo Migration
 
 on:
-  workflow_dispatch:    # Manual trigger from GitHub UI
-
-env:
-  PGPASSWORD: ${{ secrets.ODOO_PG_PASSWORD }}
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Select migration action'
+        required: true
+        default: 'upgrade_15_to_16'
+        type: choice
+        options:
+          - upgrade_15_to_16
+          - rollback_16_to_15
+          - upgrade_16_to_17
+          - rollback_17_to_16
 
 jobs:
-
-  upgrade-15-to-16:
+  migration:
     runs-on: ubuntu-latest
+    env:
+      DB_USER: odoo
+      DB_PASS: ${{ secrets.ODOO_PG_PASSWORD }}
+      ODOO15_DIR: odoo15
+      ODOO16_DIR: openupgrade16
+      ODOO17_DIR: openupgrade17
+      BACKUP_DIR: backups
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Run Upgrade 15 → 16
-        run: bash scripts/upgrade_15_to_16.sh
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
 
-  rollback-16-to-15:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Show migration action
+        run: echo "Selected action: ${{ github.event.inputs.action }}"
 
-      - name: Rollback 16 → 15
-        run: bash scripts/rollback_16_to_15.sh
+      - name: Run selected migration/rollback
+        run: |
+          set -e
+          ACTION="${{ github.event.inputs.action }}"
+          echo "Running $ACTION"
 
-  upgrade-16-to-17:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: bash scripts/upgrade_16_to_17.sh
+          case "$ACTION" in
+            upgrade_15_to_16)
+              bash scripts/upgrade_15_to_16.sh
+              ;;
+            rollback_16_to_15)
+              bash scripts/rollback_16_to_15.sh
+              ;;
+            upgrade_16_to_17)
+              bash scripts/upgrade_16_to_17.sh
+              ;;
+            rollback_17_to_16)
+              bash scripts/rollback_17_to_16.sh
+              ;;
+            *)
+              echo "Unknown action $ACTION"
+              exit 1
+              ;;
+          esac
 
-  rollback-17-to-16:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: bash scripts/rollback_17_to_16.sh
-
-  upgrade-17-to-18:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: bash scripts/upgrade_17_to_18.sh
-
-  rollback-18-to-17:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: bash scripts/rollback_18_to_17.sh
+      - name: Check Odoo version
+        run: |
+          set -e
+          case "${{ github.event.inputs.action }}" in
+            upgrade_15_to_16|rollback_16_to_15)
+              echo "Checking Odoo 16 DB version..."
+              psql -U $DB_USER -d odoo16 -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
+              ;;
+            upgrade_16_to_17|rollback_17_to_16)
+              echo "Checking Odoo 17 DB version..."
+              psql -U $DB_USER -d odoo17 -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
+              ;;
+          esac
