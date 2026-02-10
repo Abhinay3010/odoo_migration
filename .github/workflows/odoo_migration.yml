@@ -52,8 +52,6 @@ jobs:
           set -e
           export PGPASSWORD=$ODOO_DB_PASS
           mkdir -p $BACKUP_DIR
-
-          # Assign GitHub input to shell variable
           ACTION="${{ github.event.inputs.action }}"
 
           if [ "$ACTION" = "upgrade_15_to_16" ]; then
@@ -119,4 +117,3 @@ jobs:
           else
             echo "Unknown action"
             exit 1
-          fi
