@@ -44,9 +44,11 @@ jobs:
           sudo -u postgres psql -c "ALTER USER $ODOO_DB_USER WITH SUPERUSER;"
 
       - name: Show selected action
-        run: echo "Selected action: ${{ github.event.inputs.action }}"
+        run: |
+          echo "Selected action: ${{ github.event.inputs.action }}"
 
       - name: Run migration or rollback
+        shell: bash
         run: |
           set -e
           export PGPASSWORD=$ODOO_DB_PASS
@@ -57,23 +59,16 @@ jobs:
 
           if [ "$ACTION" = "upgrade_15_to_16" ]; then
             echo "Upgrading Odoo 15 → 16"
-
-            # Dump Odoo 15 DB
             pg_dump -U $ODOO_DB_USER -h localhost odoo15 | gzip > $BACKUP_DIR/odoo15.sql.gz
-
-            # Create Odoo16 DB
             dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
             createdb -U $ODOO_DB_USER -h localhost odoo16
             gunzip -c $BACKUP_DIR/odoo15.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo16
-
-            # Run OpenUpgrade
             cd $ODOO16_DIR
             python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip wheel
             pip install -r server/requirements.txt
             pip install openupgradelib psycopg2-binary
-
             ./venv/bin/python server/odoo-bin \
               -c odoo16.conf \
               -d odoo16 \
@@ -81,8 +76,6 @@ jobs:
               --update=all \
               --stop-after-init \
               --load=base,web,openupgrade_framework
-
-            # Check version
             psql -U $ODOO_DB_USER -h localhost -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
           elif [ "$ACTION" = "rollback_16_to_15" ]; then
@@ -99,14 +92,12 @@ jobs:
             dropdb -U $ODOO_DB_USER -h localhost odoo17 || true
             createdb -U $ODOO_DB_USER -h localhost odoo17
             gunzip -c $BACKUP_DIR/odoo16.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo17
-
             cd $ODOO17_DIR
             python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip wheel
             pip install -r server/requirements.txt
             pip install openupgradelib psycopg2-binary
-
             ./venv/bin/python server/odoo-bin \
               -c odoo17.conf \
               -d odoo17 \
@@ -114,7 +105,6 @@ jobs:
               --update=all \
               --stop-after-init \
               --load=base,web,openupgrade_framework
-
             psql -U $ODOO_DB_USER -h localhost -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
           elif [ "$ACTION" = "rollback_17_to_16" ]; then
@@ -128,4 +118,3 @@ jobs:
           else
             echo "Unknown action"
             exit 1
-          fi
