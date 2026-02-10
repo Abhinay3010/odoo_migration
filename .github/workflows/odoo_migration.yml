@@ -55,65 +55,65 @@ jobs:
           ACTION="${{ github.event.inputs.action }}"
 
           if [ "$ACTION" = "upgrade_15_to_16" ]; then
-            echo "Upgrading Odoo 15 → 16"
-            pg_dump -U $ODOO_DB_USER -h localhost odoo15 | gzip > $BACKUP_DIR/odoo15.sql.gz
-            dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
-            createdb -U $ODOO_DB_USER -h localhost odoo16
-            gunzip -c $BACKUP_DIR/odoo15.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo16
-            cd $ODOO16_DIR
-            python3 -m venv venv
-            source venv/bin/activate
-            pip install --upgrade pip wheel
-            pip install -r server/requirements.txt
-            pip install openupgradelib psycopg2-binary
-            ./venv/bin/python server/odoo-bin \
-              -c odoo16.conf \
-              -d odoo16 \
-              --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
-              --update=all \
-              --stop-after-init \
-              --load=base,web,openupgrade_framework
-            echo "Odoo 16 migration done"
-            psql -U $ODOO_DB_USER -h localhost -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+              echo "Upgrading Odoo 15 → 16"
+              pg_dump -U $ODOO_DB_USER -h localhost odoo15 | gzip > $BACKUP_DIR/odoo15.sql.gz
+              dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
+              createdb -U $ODOO_DB_USER -h localhost odoo16
+              gunzip -c $BACKUP_DIR/odoo15.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo16
+              cd $ODOO16_DIR
+              python3 -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip wheel
+              pip install -r server/requirements.txt
+              pip install openupgradelib psycopg2-binary
+              ./venv/bin/python server/odoo-bin \
+                -c odoo16.conf \
+                -d odoo16 \
+                --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+                --update=all \
+                --stop-after-init \
+                --load=base,web,openupgrade_framework
+              echo "Odoo 16 migration done"
+              psql -U $ODOO_DB_USER -h localhost -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
           elif [ "$ACTION" = "rollback_16_to_15" ]; then
-            echo "Rollback Odoo 16 → 15"
-            BACKUP=$(ls -t $BACKUP_DIR/odoo15_*.sql.gz | head -1)
-            dropdb -U $ODOO_DB_USER -h localhost odoo15 || true
-            createdb -U $ODOO_DB_USER -h localhost odoo15
-            gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo15
-            echo "Rollback complete"
+              echo "Rollback Odoo 16 → 15"
+              BACKUP=$(ls -t $BACKUP_DIR/odoo15_*.sql.gz | head -1)
+              dropdb -U $ODOO_DB_USER -h localhost odoo15 || true
+              createdb -U $ODOO_DB_USER -h localhost odoo15
+              gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo15
+              echo "Rollback complete"
 
           elif [ "$ACTION" = "upgrade_16_to_17" ]; then
-            echo "Upgrading Odoo 16 → 17"
-            pg_dump -U $ODOO_DB_USER -h localhost odoo16 | gzip > $BACKUP_DIR/odoo16.sql.gz
-            dropdb -U $ODOO_DB_USER -h localhost odoo17 || true
-            createdb -U $ODOO_DB_USER -h localhost odoo17
-            gunzip -c $BACKUP_DIR/odoo16.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo17
-            cd $ODOO17_DIR
-            python3 -m venv venv
-            source venv/bin/activate
-            pip install --upgrade pip wheel
-            pip install -r server/requirements.txt
-            pip install openupgradelib psycopg2-binary
-            ./venv/bin/python server/odoo-bin \
-              -c odoo17.conf \
-              -d odoo17 \
-              --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
-              --update=all \
-              --stop-after-init \
-              --load=base,web,openupgrade_framework
-            echo "Odoo 17 migration done"
-            psql -U $ODOO_DB_USER -h localhost -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+              echo "Upgrading Odoo 16 → 17"
+              pg_dump -U $ODOO_DB_USER -h localhost odoo16 | gzip > $BACKUP_DIR/odoo16.sql.gz
+              dropdb -U $ODOO_DB_USER -h localhost odoo17 || true
+              createdb -U $ODOO_DB_USER -h localhost odoo17
+              gunzip -c $BACKUP_DIR/odoo16.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo17
+              cd $ODOO17_DIR
+              python3 -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip wheel
+              pip install -r server/requirements.txt
+              pip install openupgradelib psycopg2-binary
+              ./venv/bin/python server/odoo-bin \
+                -c odoo17.conf \
+                -d odoo17 \
+                --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+                --update=all \
+                --stop-after-init \
+                --load=base,web,openupgrade_framework
+              echo "Odoo 17 migration done"
+              psql -U $ODOO_DB_USER -h localhost -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
           elif [ "$ACTION" = "rollback_17_to_16" ]; then
-            echo "Rollback Odoo 17 → 16"
-            BACKUP=$(ls -t $BACKUP_DIR/odoo16_*.sql.gz | head -1)
-            dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
-            createdb -U $ODOO_DB_USER -h localhost odoo16
-            gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo16
-            echo "Rollback complete"
+              echo "Rollback Odoo 17 → 16"
+              BACKUP=$(ls -t $BACKUP_DIR/odoo16_*.sql.gz | head -1)
+              dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
+              createdb -U $ODOO_DB_USER -h localhost odoo16
+              gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo16
+              echo "Rollback complete"
 
           else
-            echo "Unknown action"
-            exit 1
+              echo "Unknown action"
+              exit 1
