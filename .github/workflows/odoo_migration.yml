@@ -24,6 +24,7 @@ jobs:
       ODOO16_DIR: openupgrade16
       ODOO17_DIR: openupgrade17
       BACKUP_DIR: backups
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
