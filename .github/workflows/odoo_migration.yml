@@ -1,5 +1,6 @@
 name: Odoo Migration
 
+# Manual trigger only
 on:
   workflow_dispatch:
     inputs:
@@ -18,8 +19,8 @@ jobs:
   migration:
     runs-on: ubuntu-latest
     env:
-      DB_USER: odoo
-      DB_PASS: ${{ secrets.ODOO_PG_PASSWORD }}
+      ODOO_DB_USER: odoo
+      ODOO_PG_PASSWORD: ${{ secrets.ODOO_PG_PASSWORD }}
       ODOO15_DIR: odoo15
       ODOO16_DIR: openupgrade16
       ODOO17_DIR: openupgrade17
@@ -34,44 +35,28 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Show migration action
+      - name: Show selected action
         run: echo "Selected action: ${{ github.event.inputs.action }}"
 
-      - name: Run selected migration/rollback
-        run: |
-          set -e
-          ACTION="${{ github.event.inputs.action }}"
-          echo "Running $ACTION"
+      - name: Install DB dependencies
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-          case "$ACTION" in
-            upgrade_15_to_16)
-              bash scripts/upgrade_15_to_16.sh
-              ;;
-            rollback_16_to_15)
-              bash scripts/rollback_16_to_15.sh
-              ;;
-            upgrade_16_to_17)
-              bash scripts/upgrade_16_to_17.sh
-              ;;
-            rollback_17_to_16)
-              bash scripts/rollback_17_to_16.sh
-              ;;
-            *)
-              echo "Unknown action $ACTION"
-              exit 1
-              ;;
-          esac
-
-      - name: Check Odoo version
+      - name: Run migration/rollback
         run: |
-          set -e
-          case "${{ github.event.inputs.action }}" in
-            upgrade_15_to_16|rollback_16_to_15)
-              echo "Checking Odoo 16 DB version..."
-              psql -U $DB_USER -d odoo16 -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
-              ;;
-            upgrade_16_to_17|rollback_17_to_16)
-              echo "Checking Odoo 17 DB version..."
-              psql -U $DB_USER -d odoo17 -c "SELECT latest_version FROM ir_module_module WHERE name='base';"
-              ;;
-          esac
+          if [ "${{ github.event.inputs.action }}" = "upgrade_15_to_16" ]; then
+            bash scripts/upgrade_15_to_16.sh
+          elif [ "${{ github.event.inputs.action }}" = "rollback_16_to_15" ]; then
+            bash scripts/rollback_16_to_15.sh
+          elif [ "${{ github.event.inputs.action }}" = "upgrade_16_to_17" ]; then
+            bash scripts/upgrade_16_to_17.sh
+          elif [ "${{ github.event.inputs.action }}" = "rollback_17_to_16" ]; then
+            bash scripts/rollback_17_to_16.sh
+          else
+            echo "Invalid action"
+            exit 1
+          fi
+
+      - name: Verify DB version
+        run: |
+          VERSION=$(psql -U $ODOO_DB_USER -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';")
+          echo "Odoo version after migration/rollback: $VERSION"
