@@ -38,4 +38,47 @@ jobs:
       - name: Show selected action
         run: |
           echo "Selected action: ${{ github.event.inputs.action }}"
-          echo "Starting migration workflow..."
+
+      - name: Run Migration / Rollback Script
+        run: |
+          set -e
+          ACTION="${{ github.event.inputs.action }}"
+
+          case "$ACTION" in
+            upgrade_15_to_16)
+              echo "Upgrading Odoo 15 → 16"
+              bash ./scripts/upgrade_15_to_16.sh
+              ;;
+            rollback_16_to_15)
+              echo "Rolling back Odoo 16 → 15"
+              bash ./scripts/rollback_16_to_15.sh
+              ;;
+            upgrade_16_to_17)
+              echo "Upgrading Odoo 16 → 17"
+              bash ./scripts/upgrade_16_to_17.sh
+              ;;
+            rollback_17_to_16)
+              echo "Rolling back Odoo 17 → 16"
+              bash ./scripts/rollback_17_to_16.sh
+              ;;
+            *)
+              echo "Invalid action: $ACTION"
+              exit 1
+              ;;
+          esac
+
+      - name: Show Odoo DB version after migration
+        run: |
+          DB=""
+          case "${{ github.event.inputs.action }}" in
+            upgrade_15_to_16|rollback_16_to_15)
+              DB="odoo16"
+              ;;
+            upgrade_16_to_17|rollback_17_to_16)
+              DB="odoo17"
+              ;;
+          esac
+
+          echo "Checking version in database $DB"
+          export PGPASSWORD=$ODOO_PG_PASSWORD
+          psql -U $ODOO_DB_USER -d $DB -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
