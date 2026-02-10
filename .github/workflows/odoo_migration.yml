@@ -1,0 +1,182 @@
+name: Odoo Migration 15→18 with Rollbacks
+
+on:
+  workflow_dispatch:   # Manual trigger
+
+env:
+  PGPASSWORD: ${{ secrets.ODOO_PG_PASSWORD }}
+
+jobs:
+
+  # -----------------------------
+  # Odoo 15 → 16
+  # -----------------------------
+  upgrade_15_to_16:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update && sudo apt install -y git python3 python3-venv python3-pip \
+          libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev libjpeg-dev libpq-dev \
+          libffi-dev postgresql postgresql-contrib wkhtmltopdf nodejs npm
+
+      - name: Setup PostgreSQL user
+        run: |
+          sudo -u postgres createuser -s odoo || true
+          sudo -u postgres psql -c "ALTER USER odoo WITH PASSWORD '$PGPASSWORD';"
+
+      - name: Odoo 15 Setup
+        run: |
+          sudo mkdir -p /opt/odoo/odoo15 /opt/odoo/backups
+          sudo chown -R $USER:$USER /opt/odoo
+          cd /opt/odoo/odoo15
+          git clone -b 15.0 https://github.com/odoo/odoo.git server
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install wheel
+          pip install -r server/requirements.txt
+          createdb -U odoo odoo15
+          echo "[options]
+db_user = odoo
+db_password = $PGPASSWORD
+addons_path = /opt/odoo/odoo15/server/addons
+xmlrpc_port = 8015
+logfile = /opt/odoo/odoo15/odoo15.log" > odoo15.conf
+
+      - name: Migrate 15 → 16
+        run: |
+          sudo mkdir -p /opt/odoo/openupgrade16
+          cd /opt/odoo/openupgrade16
+          git clone -b 16.0 https://github.com/odoo/odoo.git server
+          git clone -b 16.0 https://github.com/OCA/OpenUpgrade.git OpenUpgrade
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install wheel
+          pip install -r server/requirements.txt
+          pip install openupgradelib psycopg2-binary
+          createdb -U odoo odoo16 || true
+          pg_dump -U odoo odoo15 | gzip > /opt/odoo/backups/odoo15.sql.gz
+          gunzip -c /opt/odoo/backups/odoo15.sql.gz | psql -U odoo odoo16
+          echo "[options]
+db_user = odoo
+db_password = $PGPASSWORD
+addons_path = /opt/odoo/openupgrade16/OpenUpgrade,/opt/odoo/openupgrade16/server/addons
+xmlrpc_port = 8016
+logfile = /opt/odoo/openupgrade16/odoo16.log" > odoo16.conf
+          ./venv/bin/python server/odoo-bin -c odoo16.conf -d odoo16 \
+            --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+            --update=all --stop-after-init --load=base,web,openupgrade_framework
+          echo "✅ Migration 15 → 16 completed successfully!"
+          psql -U odoo -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+  # -----------------------------
+  # Rollback 16 → 15
+  # -----------------------------
+  rollback_16_to_15:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.rollback_16_to_15 == 'true' }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Restore Odoo 15 DB
+        run: |
+          gunzip -c /opt/odoo/backups/odoo15.sql.gz | psql -U odoo -d odoo15
+          echo "✅ Rollback 16 → 15 completed successfully!"
+          psql -U odoo -d odoo15 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+  # -----------------------------
+  # Odoo 16 → 17
+  # -----------------------------
+  upgrade_16_to_17:
+    runs-on: ubuntu-latest
+    needs: upgrade_15_to_16
+    steps:
+      - uses: actions/checkout@v3
+      - name: Migrate 16 → 17
+        run: |
+          sudo mkdir -p /opt/odoo/openupgrade17
+          cd /opt/odoo/openupgrade17
+          git clone -b 17.0 https://github.com/odoo/odoo.git server
+          git clone -b 17.0 https://github.com/OCA/OpenUpgrade.git OpenUpgrade
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install wheel
+          pip install -r server/requirements.txt
+          pip install openupgradelib psycopg2-binary
+          createdb -U odoo odoo17 || true
+          pg_dump -U odoo odoo16 | gzip > /opt/odoo/backups/odoo16.sql.gz
+          gunzip -c /opt/odoo/backups/odoo16.sql.gz | psql -U odoo odoo17
+          echo "[options]
+db_user = odoo
+db_password = $PGPASSWORD
+addons_path = /opt/odoo/openupgrade17/OpenUpgrade,/opt/odoo/openupgrade17/server/addons
+xmlrpc_port = 8017
+logfile = /opt/odoo/openupgrade17/odoo17.log" > odoo17.conf
+          ./venv/bin/python server/odoo-bin -c odoo17.conf -d odoo17 \
+            --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+            --update=all --stop-after-init --load=base,web,openupgrade_framework
+          echo "✅ Migration 16 → 17 completed successfully!"
+          psql -U odoo -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+  # -----------------------------
+  # Rollback 17 → 16
+  # -----------------------------
+  rollback_17_to_16:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.rollback_17_to_16 == 'true' }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Restore Odoo 16 DB
+        run: |
+          gunzip -c /opt/odoo/backups/odoo16.sql.gz | psql -U odoo -d odoo16
+          echo "✅ Rollback 17 → 16 completed successfully!"
+          psql -U odoo -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+  # -----------------------------
+  # Odoo 17 → 18
+  # -----------------------------
+  upgrade_17_to_18:
+    runs-on: ubuntu-latest
+    needs: upgrade_16_to_17
+    steps:
+      - uses: actions/checkout@v3
+      - name: Migrate 17 → 18
+        run: |
+          sudo mkdir -p /opt/odoo/openupgrade18
+          cd /opt/odoo/openupgrade18
+          git clone -b 18.0 https://github.com/odoo/odoo.git server
+          git clone -b 18.0 https://github.com/OCA/OpenUpgrade.git OpenUpgrade
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install wheel
+          pip install -r server/requirements.txt
+          pip install openupgradelib psycopg2-binary
+          createdb -U odoo odoo18 || true
+          pg_dump -U odoo odoo17 | gzip > /opt/odoo/backups/odoo17.sql.gz
+          gunzip -c /opt/odoo/backups/odoo17.sql.gz | psql -U odoo odoo18
+          echo "[options]
+db_user = odoo
+db_password = $PGPASSWORD
+addons_path = /opt/odoo/openupgrade18/OpenUpgrade,/opt/odoo/openupgrade18/server/addons
+xmlrpc_port = 8018
+logfile = /opt/odoo/openupgrade18/odoo18.log" > odoo18.conf
+          ./venv/bin/python server/odoo-bin -c odoo18.conf -d odoo18 \
+            --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+            --update=all --stop-after-init --load=base,web,openupgrade_framework
+          echo "✅ Migration 17 → 18 completed successfully!"
+          psql -U odoo -d odoo18 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+  # -----------------------------
+  # Rollback 18 → 17
+  # -----------------------------
+  rollback_18_to_17:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.rollback_18_to_17 == 'true' }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Restore Odoo 17 DB
+        run: |
+          gunzip -c /opt/odoo/backups/odoo17.sql.gz | psql -U odoo -d odoo17
+          echo "✅ Rollback 18 → 17 completed successfully!"
+          psql -U odoo -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
