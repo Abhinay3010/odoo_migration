@@ -52,7 +52,10 @@ jobs:
           export PGPASSWORD=$ODOO_DB_PASS
           mkdir -p $BACKUP_DIR
 
-          if [[ "${{ github.event.inputs.action }}" == "upgrade_15_to_16" ]]; then
+          # Assign GitHub input to shell variable
+          ACTION="${{ github.event.inputs.action }}"
+
+          if [ "$ACTION" = "upgrade_15_to_16" ]; then
             echo "Upgrading Odoo 15 → 16"
 
             # Dump Odoo 15 DB
@@ -82,7 +85,7 @@ jobs:
             # Check version
             psql -U $ODOO_DB_USER -h localhost -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
-          elif [[ "${{ github.event.inputs.action }}" == "rollback_16_to_15" ]]; then
+          elif [ "$ACTION" = "rollback_16_to_15" ]; then
             echo "Rollback Odoo 16 → 15"
             BACKUP=$(ls -t $BACKUP_DIR/odoo15_*.sql.gz | head -1)
             dropdb -U $ODOO_DB_USER -h localhost odoo15 || true
@@ -90,7 +93,7 @@ jobs:
             gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo15
             echo "Rollback complete"
 
-          elif [[ "${{ github.event.inputs.action }}" == "upgrade_16_to_17" ]]; then
+          elif [ "$ACTION" = "upgrade_16_to_17" ]; then
             echo "Upgrading Odoo 16 → 17"
             pg_dump -U $ODOO_DB_USER -h localhost odoo16 | gzip > $BACKUP_DIR/odoo16.sql.gz
             dropdb -U $ODOO_DB_USER -h localhost odoo17 || true
@@ -114,7 +117,7 @@ jobs:
 
             psql -U $ODOO_DB_USER -h localhost -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
-          elif [[ "${{ github.event.inputs.action }}" == "rollback_17_to_16" ]]; then
+          elif [ "$ACTION" = "rollback_17_to_16" ]; then
             echo "Rollback Odoo 17 → 16"
             BACKUP=$(ls -t $BACKUP_DIR/odoo16_*.sql.gz | head -1)
             dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
