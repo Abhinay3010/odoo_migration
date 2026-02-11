@@ -1,119 +1,213 @@
-name: Odoo Migration
+name: Odoo Multi Version Migration Lab
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Select migration action'
+        description: "Select action"
         required: true
-        default: 'upgrade_15_to_16'
         type: choice
         options:
-          - upgrade_15_to_16
-          - rollback_16_to_15
-          - upgrade_16_to_17
-          - rollback_17_to_16
+          - setup_15
+          - upgrade_15_16
+          - upgrade_16_17
+          - upgrade_17_18
+          - rollback_15_16
+          - rollback_16_17
+          - rollback_17_18
 
 jobs:
-  migration:
+  odoo:
     runs-on: ubuntu-latest
 
-    env:
-      ODOO_DB_USER: odoo
-      ODOO_DB_PASS: ${{ secrets.ODOO_PG_PASSWORD }}
-      ODOO15_DIR: odoo15
-      ODOO16_DIR: openupgrade16
-      ODOO17_DIR: openupgrade17
-      BACKUP_DIR: backups
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+      - name: Execute on VM
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          python-version: '3.11'
+          host: ${{ secrets.VM_HOST }}
+          username: ubuntu
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
 
-      - name: Install PostgreSQL
-        run: |
-          sudo apt update
-          sudo apt install -y postgresql postgresql-contrib
-          sudo service postgresql start
-          sudo -u postgres psql -c "CREATE USER $ODOO_DB_USER WITH PASSWORD '$ODOO_DB_PASS';" || true
-          sudo -u postgres psql -c "ALTER USER $ODOO_DB_USER WITH SUPERUSER;" || true
+            set -e
+            ACTION="${{ github.event.inputs.action }}"
+            echo "Selected Action: $ACTION"
 
-      - name: Show selected action
-        run: echo "Selected action: ${{ github.event.inputs.action }}"
+            sudo apt update
+            sudo apt install -y git python3 python3-venv python3-pip \
+                                postgresql postgresql-contrib
 
-      - name: Run migration or rollback
-        shell: bash
-        run: |
-          set -e
-          export PGPASSWORD=$ODOO_DB_PASS
-          mkdir -p $BACKUP_DIR
-          ACTION="${{ github.event.inputs.action }}"
+            sudo service postgresql start
 
-          if [ "$ACTION" = "upgrade_15_to_16" ]; then
-              echo "Upgrading Odoo 15 → 16"
-              pg_dump -U $ODOO_DB_USER -h localhost odoo15 | gzip > $BACKUP_DIR/odoo15.sql.gz
-              dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
-              createdb -U $ODOO_DB_USER -h localhost odoo16
-              gunzip -c $BACKUP_DIR/odoo15.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo16
-              cd $ODOO16_DIR
-              python3 -m venv venv
-              source venv/bin/activate
-              pip install --upgrade pip wheel
-              pip install -r server/requirements.txt
+            sudo -u postgres psql -c "CREATE USER odoo WITH PASSWORD '${{ secrets.DB_PASSWORD }}';" || true
+            sudo -u postgres psql -c "ALTER USER odoo WITH SUPERUSER;" || true
+
+            export PGPASSWORD=${{ secrets.DB_PASSWORD }}
+
+            sudo mkdir -p /opt/odoo/backups
+            sudo chown -R ubuntu:ubuntu /opt/odoo
+
+            ##############################
+            # SETUP ODOO 15
+            ##############################
+
+            if [ "$ACTION" = "setup_15" ]; then
+
+              cd /opt/odoo
+
+              git clone --depth 1 -b 15.0 https://github.com/odoo/odoo.git odoo15 || true
+
+              dropdb -U odoo odoo15_db || true
+              createdb -U odoo odoo15_db
+
+              python3 -m venv venv15
+              source venv15/bin/activate
+              pip install wheel
+              pip install -r odoo15/requirements.txt
+
+              ./odoo15/odoo-bin -d odoo15_db --stop-after-init
+
+              pg_dump -U odoo odoo15_db > backups/odoo15_backup.sql
+
+              echo "Odoo 15 Installed"
+
+              psql -U odoo -d odoo15_db -Atc \
+              "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+            fi
+
+            ##############################
+            # 15 → 16
+            ##############################
+
+            if [ "$ACTION" = "upgrade_15_16" ]; then
+
+              cd /opt/odoo
+
+              git clone --depth 1 -b 16.0 https://github.com/odoo/odoo.git odoo16 || true
+              git clone --depth 1 -b 16.0 https://github.com/OCA/OpenUpgrade.git openupgrade16 || true
+
+              dropdb -U odoo odoo16_db || true
+              createdb -U odoo odoo16_db
+
+              psql -U odoo odoo16_db < backups/odoo15_backup.sql
+
+              python3 -m venv venv16
+              source venv16/bin/activate
+              pip install wheel
+              pip install -r openupgrade16/requirements.txt
               pip install openupgradelib psycopg2-binary
-              ./venv/bin/python server/odoo-bin \
-                -c odoo16.conf \
-                -d odoo16 \
-                --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+
+              ./openupgrade16/odoo-bin \
+                -d odoo16_db \
                 --update=all \
                 --stop-after-init \
                 --load=base,web,openupgrade_framework
-              echo "Odoo 16 migration done"
-              psql -U $ODOO_DB_USER -h localhost -d odoo16 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
-          elif [ "$ACTION" = "rollback_16_to_15" ]; then
-              echo "Rollback Odoo 16 → 15"
-              BACKUP=$(ls -t $BACKUP_DIR/odoo15_*.sql.gz | head -1)
-              dropdb -U $ODOO_DB_USER -h localhost odoo15 || true
-              createdb -U $ODOO_DB_USER -h localhost odoo15
-              gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo15
-              echo "Rollback complete"
+              pg_dump -U odoo odoo16_db > backups/odoo16_backup.sql
 
-          elif [ "$ACTION" = "upgrade_16_to_17" ]; then
-              echo "Upgrading Odoo 16 → 17"
-              pg_dump -U $ODOO_DB_USER -h localhost odoo16 | gzip > $BACKUP_DIR/odoo16.sql.gz
-              dropdb -U $ODOO_DB_USER -h localhost odoo17 || true
-              createdb -U $ODOO_DB_USER -h localhost odoo17
-              gunzip -c $BACKUP_DIR/odoo16.sql.gz | psql -U $ODOO_DB_USER -h localhost odoo17
-              cd $ODOO17_DIR
-              python3 -m venv venv
-              source venv/bin/activate
-              pip install --upgrade pip wheel
-              pip install -r server/requirements.txt
+              echo "Upgraded to Odoo 16"
+
+              psql -U odoo -d odoo16_db -Atc \
+              "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+            fi
+
+            ##############################
+            # 16 → 17
+            ##############################
+
+            if [ "$ACTION" = "upgrade_16_17" ]; then
+
+              cd /opt/odoo
+
+              git clone --depth 1 -b 17.0 https://github.com/odoo/odoo.git odoo17 || true
+              git clone --depth 1 -b 17.0 https://github.com/OCA/OpenUpgrade.git openupgrade17 || true
+
+              dropdb -U odoo odoo17_db || true
+              createdb -U odoo odoo17_db
+
+              psql -U odoo odoo17_db < backups/odoo16_backup.sql
+
+              python3 -m venv venv17
+              source venv17/bin/activate
+              pip install wheel
+              pip install -r openupgrade17/requirements.txt
               pip install openupgradelib psycopg2-binary
-              ./venv/bin/python server/odoo-bin \
-                -c odoo17.conf \
-                -d odoo17 \
-                --upgrade-path=OpenUpgrade/openupgrade_scripts/scripts \
+
+              ./openupgrade17/odoo-bin \
+                -d odoo17_db \
                 --update=all \
                 --stop-after-init \
                 --load=base,web,openupgrade_framework
-              echo "Odoo 17 migration done"
-              psql -U $ODOO_DB_USER -h localhost -d odoo17 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
 
-          elif [ "$ACTION" = "rollback_17_to_16" ]; then
-              echo "Rollback Odoo 17 → 16"
-              BACKUP=$(ls -t $BACKUP_DIR/odoo16_*.sql.gz | head -1)
-              dropdb -U $ODOO_DB_USER -h localhost odoo16 || true
-              createdb -U $ODOO_DB_USER -h localhost odoo16
-              gunzip -c $BACKUP | psql -U $ODOO_DB_USER -h localhost odoo16
-              echo "Rollback complete"
+              pg_dump -U odoo odoo17_db > backups/odoo17_backup.sql
 
-          else
-              echo "Unknown action"
-              exit 1
+              echo "Upgraded to Odoo 17"
+
+              psql -U odoo -d odoo17_db -Atc \
+              "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+            fi
+
+            ##############################
+            # 17 → 18
+            ##############################
+
+            if [ "$ACTION" = "upgrade_17_18" ]; then
+
+              cd /opt/odoo
+
+              git clone --depth 1 -b 18.0 https://github.com/odoo/odoo.git odoo18 || true
+              git clone --depth 1 -b 18.0 https://github.com/OCA/OpenUpgrade.git openupgrade18 || true
+
+              dropdb -U odoo odoo18_db || true
+              createdb -U odoo odoo18_db
+
+              psql -U odoo odoo18_db < backups/odoo17_backup.sql
+
+              python3 -m venv venv18
+              source venv18/bin/activate
+              pip install wheel
+              pip install -r openupgrade18/requirements.txt
+              pip install openupgradelib psycopg2-binary
+
+              ./openupgrade18/odoo-bin \
+                -d odoo18_db \
+                --update=all \
+                --stop-after-init \
+                --load=base,web,openupgrade_framework
+
+              pg_dump -U odoo odoo18_db > backups/odoo18_backup.sql
+
+              echo "Upgraded to Odoo 18"
+
+              psql -U odoo -d odoo18_db -Atc \
+              "SELECT latest_version FROM ir_module_module WHERE name='base';"
+
+            fi
+
+            ##############################
+            # ROLLBACKS
+            ##############################
+
+            if [ "$ACTION" = "rollback_15_16" ]; then
+              dropdb -U odoo odoo16_db || true
+              createdb -U odoo odoo16_db
+              psql -U odoo odoo16_db < backups/odoo15_backup.sql
+              echo "Rolled back to Odoo 15"
+            fi
+
+            if [ "$ACTION" = "rollback_16_17" ]; then
+              dropdb -U odoo odoo17_db || true
+              createdb -U odoo odoo17_db
+              psql -U odoo odoo17_db < backups/odoo16_backup.sql
+              echo "Rolled back to Odoo 16"
+            fi
+
+            if [ "$ACTION" = "rollback_17_18" ]; then
+              dropdb -U odoo odoo18_db || true
+              createdb -U odoo odoo18_db
+              psql -U odoo odoo18_db < backups/odoo17_backup.sql
+              echo "Rolled back to Odoo 17"
+            fi
