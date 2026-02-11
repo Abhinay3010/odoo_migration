@@ -34,45 +34,48 @@ jobs:
             echo "Selected Action: $ACTION"
             echo "==============================="
 
-            ###############################
+            #######################################
             # SYSTEM SETUP
-            ###############################
+            #######################################
             sudo apt update -y
-            sudo apt install -y git python3 python3-venv python3-pip \
+            sudo apt install -y git build-essential libpq-dev \
                                 postgresql postgresql-contrib \
-                                build-essential libpq-dev
+                                python3.9 python3.9-venv python3.9-dev \
+                                python3.10 python3.10-venv python3.10-dev
+
             sudo systemctl enable postgresql
             sudo systemctl start postgresql
 
-            # Force md5 auth for all users (Odoo user only)
-            sudo sed -i \
-              -e 's/^\(local\s\+all\s\+all\s\+\)peer/\1md5/' \
-              -e 's/^\(host\s\+all\s\+all\s\+127\.0\.0\.1\/32\s\+\)md5/\1md5/' \
-              -e 's/^\(host\s\+all\s\+all\s\+::1\/128\s\+\)scram-sha-256/\1md5/' \
-              /etc/postgresql/*/main/pg_hba.conf
+            #######################################
+            # FIX POSTGRES AUTH (SAFE)
+            #######################################
+            sudo sed -i 's/local\s\+all\s\+postgres\s\+.*/local all postgres peer/' /etc/postgresql/*/main/pg_hba.conf
+            sudo sed -i 's/local\s\+all\s\+all\s\+.*/local all all md5/' /etc/postgresql/*/main/pg_hba.conf
             sudo systemctl restart postgresql
 
-            ###############################
+            #######################################
             # CREATE ODOO USER
-            ###############################
+            #######################################
             ODOO_PASSWORD="${{ secrets.DB_PASSWORD }}"
             sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='odoo'" | grep -q 1 || \
               sudo -u postgres psql -c "CREATE USER odoo WITH PASSWORD '$ODOO_PASSWORD';"
+
             sudo -u postgres psql -c "ALTER USER odoo WITH SUPERUSER;" || true
             export PGPASSWORD="$ODOO_PASSWORD"
 
-            ###############################
+            #######################################
             # DIRECTORY SETUP
-            ###############################
+            #######################################
             sudo mkdir -p /opt/odoo/backups
             sudo chown -R ubuntu:ubuntu /opt/odoo
             cd /opt/odoo
 
-            ###############################
+            #######################################
             # FUNCTIONS
-            ###############################
+            #######################################
             print_version() {
-              psql -h localhost -U odoo -d $1 -Atc "SELECT latest_version FROM ir_module_module WHERE name='base';"
+              psql -h localhost -U odoo -d $1 -Atc \
+              "SELECT latest_version FROM ir_module_module WHERE name='base';"
             }
 
             git_clone_or_update() {
@@ -80,119 +83,111 @@ jobs:
               BRANCH=$2
               DIR=$3
               if [ -d "$DIR/.git" ]; then
-                echo "✅ Updating $DIR"
+                echo "Updating $DIR"
                 git -C $DIR fetch --depth 1 origin $BRANCH
                 git -C $DIR reset --hard origin/$BRANCH
               else
-                echo "✅ Cloning $DIR"
+                echo "Cloning $DIR"
                 git clone --depth 1 -b $BRANCH $REPO_URL $DIR
               fi
             }
 
-            cache_venv() {
-              VENV_DIR=$1
-              REQUIREMENTS=$2
-              if [ -d "$VENV_DIR" ]; then
-                echo "✅ Using cached $VENV_DIR"
-              else
-                python3 -m venv $VENV_DIR
+            create_venv() {
+              PYTHON_BIN=$1
+              VENV_DIR=$2
+              REQUIREMENTS=$3
+
+              if [ ! -d "$VENV_DIR" ]; then
+                $PYTHON_BIN -m venv $VENV_DIR
                 source $VENV_DIR/bin/activate
-                pip install --upgrade pip wheel
+                pip install --upgrade pip==23.2 wheel setuptools
                 pip install -r $REQUIREMENTS
                 pip install openupgradelib psycopg2-binary || true
               fi
               source $VENV_DIR/bin/activate
             }
 
-            ###############################
-            # ODOO SETUP / UPGRADES / ROLLBACKS
-            ###############################
-
-            # Setup Odoo 15
+            #######################################
+            # SETUP ODOO 15 (Python 3.9)
+            #######################################
             if [ "$ACTION" = "setup_15" ]; then
-              rm -rf odoo15 venv15 || true
               git_clone_or_update https://github.com/odoo/odoo.git 15.0 odoo15
+
               sudo -u postgres dropdb odoo15_db || true
               sudo -u postgres createdb -O odoo odoo15_db
-              cache_venv venv15 odoo15/requirements.txt
+
+              create_venv python3.9 venv15 odoo15/requirements.txt
+
               ./odoo15/odoo-bin -d odoo15_db --stop-after-init
+
               pg_dump -h localhost -U odoo odoo15_db > backups/odoo15_backup.sql
-              echo "✅ Odoo 15 Installed"
+
+              echo "Odoo 15 Installed"
               print_version odoo15_db
             fi
 
-            # 15 → 16 Upgrade
+            #######################################
+            # 15 → 16 (Python 3.10)
+            #######################################
             if [ "$ACTION" = "upgrade_15_16" ]; then
-              rm -rf odoo16 openupgrade16 venv16 || true
               git_clone_or_update https://github.com/odoo/odoo.git 16.0 odoo16
               git_clone_or_update https://github.com/OCA/OpenUpgrade.git 16.0 openupgrade16
+
               sudo -u postgres dropdb odoo16_db || true
               sudo -u postgres createdb -O odoo odoo16_db
               psql -h localhost -U odoo odoo16_db < backups/odoo15_backup.sql
-              cache_venv venv16 openupgrade16/requirements.txt
+
+              create_venv python3.10 venv16 openupgrade16/requirements.txt
+
               ./openupgrade16/odoo-bin -d odoo16_db \
                 --upgrade-path=openupgrade16/openupgrade_scripts/scripts \
-                --update=all --stop-after-init --load=base,web,openupgrade_framework
+                --update=all --stop-after-init \
+                --load=base,web,openupgrade_framework
+
               pg_dump -h localhost -U odoo odoo16_db > backups/odoo16_backup.sql
-              echo "✅ Upgraded to Odoo 16"
               print_version odoo16_db
             fi
 
-            # 16 → 17 Upgrade
+            #######################################
+            # 16 → 17
+            #######################################
             if [ "$ACTION" = "upgrade_16_17" ]; then
-              rm -rf odoo17 openupgrade17 venv17 || true
               git_clone_or_update https://github.com/odoo/odoo.git 17.0 odoo17
               git_clone_or_update https://github.com/OCA/OpenUpgrade.git 17.0 openupgrade17
+
               sudo -u postgres dropdb odoo17_db || true
               sudo -u postgres createdb -O odoo odoo17_db
               psql -h localhost -U odoo odoo17_db < backups/odoo16_backup.sql
-              cache_venv venv17 openupgrade17/requirements.txt
+
+              create_venv python3.10 venv17 openupgrade17/requirements.txt
+
               ./openupgrade17/odoo-bin -d odoo17_db \
                 --upgrade-path=openupgrade17/openupgrade_scripts/scripts \
-                --update=all --stop-after-init --load=base,web,openupgrade_framework
+                --update=all --stop-after-init \
+                --load=base,web,openupgrade_framework
+
               pg_dump -h localhost -U odoo odoo17_db > backups/odoo17_backup.sql
-              echo "✅ Upgraded to Odoo 17"
               print_version odoo17_db
             fi
 
-            # 17 → 18 Upgrade
+            #######################################
+            # 17 → 18
+            #######################################
             if [ "$ACTION" = "upgrade_17_18" ]; then
-              rm -rf odoo18 openupgrade18 venv18 || true
               git_clone_or_update https://github.com/odoo/odoo.git 18.0 odoo18
               git_clone_or_update https://github.com/OCA/OpenUpgrade.git 18.0 openupgrade18
+
               sudo -u postgres dropdb odoo18_db || true
               sudo -u postgres createdb -O odoo odoo18_db
               psql -h localhost -U odoo odoo18_db < backups/odoo17_backup.sql
-              cache_venv venv18 openupgrade18/requirements.txt
+
+              create_venv python3.10 venv18 openupgrade18/requirements.txt
+
               ./openupgrade18/odoo-bin -d odoo18_db \
                 --upgrade-path=openupgrade18/openupgrade_scripts/scripts \
-                --update=all --stop-after-init --load=base,web,openupgrade_framework
+                --update=all --stop-after-init \
+                --load=base,web,openupgrade_framework
+
               pg_dump -h localhost -U odoo odoo18_db > backups/odoo18_backup.sql
-              echo "✅ Upgraded to Odoo 18"
-              print_version odoo18_db
-            fi
-
-            # Rollbacks
-            if [ "$ACTION" = "rollback_15_16" ]; then
-              sudo -u postgres dropdb odoo16_db || true
-              sudo -u postgres createdb -O odoo odoo16_db
-              psql -h localhost -U odoo odoo16_db < backups/odoo15_backup.sql
-              echo "↩ Rolled back to Odoo 15 DB state"
-              print_version odoo16_db
-            fi
-
-            if [ "$ACTION" = "rollback_16_17" ]; then
-              sudo -u postgres dropdb odoo17_db || true
-              sudo -u postgres createdb -O odoo odoo17_db
-              psql -h localhost -U odoo odoo17_db < backups/odoo16_backup.sql
-              echo "↩ Rolled back to Odoo 16 DB state"
-              print_version odoo17_db
-            fi
-
-            if [ "$ACTION" = "rollback_17_18" ]; then
-              sudo -u postgres dropdb odoo18_db || true
-              sudo -u postgres createdb -O odoo odoo18_db
-              psql -h localhost -U odoo odoo18_db < backups/odoo17_backup.sql
-              echo "↩ Rolled back to Odoo 17 DB state"
               print_version odoo18_db
             fi
